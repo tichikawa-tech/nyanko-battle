@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nyanko Battle</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+body {
+  background: #111;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  font-family: 'Segoe UI', sans-serif;
+  overflow: hidden;
+}
+canvas {
+  display: block;
+  cursor: pointer;
+}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// Responsive sizing
+function resize() {
+  canvas.width = Math.min(window.innerWidth, 1200);
+  canvas.height = Math.min(window.innerHeight, 700);
+}
+resize();
+window.addEventListener('resize', resize);
+
+const W = () => canvas.width;
+const H = () => canvas.height;
+const GROUND_Y = () => H() * 0.72;
+const BASE_SIZE = () => H() * 0.18;
+
+// ---- Game State ----
+let money = 500;
+let maxMoney = 5000;
+let moneyRate = 1;
+let moneyLevel = 1;
+const MONEY_UPGRADE_COST = [0, 200, 400, 800, 1500, 3000, 6000];
+let playerHP = 1000;
+let playerMaxHP = 1000;
+let enemyHP = 1500;
+let enemyMaxHP = 1500;
+let gameState = 'title'; // title, playing, win, lose
+let stageLevel = 1;
+let units = [];
+let enemies = [];
+let effects = [];
+let frame = 0;
+let spawnTimer = 0;
+let bossSpawned = false;
+
+// ---- Unit Definitions ----
+const CAT_TYPES = [
+  { name: 'Neko',     cost: 50,  hp: 120, atk: 30,  speed: 1.5, range: 50,  cooldown: 60,   atkSpeed: 30, color: '#ffcc00', size: 24, emoji: 'N', desc: 'Basic' },
+  { name: 'Tank',     cost: 100, hp: 400, atk: 15,  speed: 1.0, range: 40,  cooldown: 90,   atkSpeed: 40, color: '#888',    size: 28, emoji: 'T', desc: 'Tanky' },
+  { name: 'Axe',      cost: 150, hp: 150, atk: 80,  speed: 1.2, range: 55,  cooldown: 120,  atkSpeed: 50, color: '#e74c3c', size: 26, emoji: 'A', desc: 'Strong' },
+  { name: 'Gross',    cost: 200, hp: 100, atk: 50,  speed: 1.3, range: 200, cooldown: 150,  atkSpeed: 45, color: '#3498db', size: 22, emoji: 'G', desc: 'Ranged' },
+  { name: 'Cow',      cost: 300, hp: 200, atk: 40,  speed: 2.5, range: 50,  cooldown: 180,  atkSpeed: 25, color: '#2ecc71', size: 30, emoji: 'C', desc: 'Fast' },
+  { name: 'Bird',     cost: 500, hp: 250, atk: 120, speed: 1.0, range: 300, cooldown: 240,  atkSpeed: 60, color: '#9b59b6', size: 22, emoji: 'B', desc: 'Sniper' },
+  { name: 'Fish',     cost: 400, hp: 350, atk: 100, speed: 1.8, range: 60,  cooldown: 200,  atkSpeed: 35, color: '#1abc9c', size: 28, emoji: 'F', desc: 'All-round' },
+  { name: 'Lizard',   cost: 650, hp: 180, atk: 200, speed: 0.8, range: 350, cooldown: 300,  atkSpeed: 80, color: '#e67e22', size: 26, emoji: 'L', desc: 'Area ATK' },
+];
+
+const ENEMY_TYPES = [
+  { name: 'Doge',    hp: 100, atk: 20,  speed: 1.2, range: 40,  atkSpeed: 30, color: '#c0392b', size: 22 },
+  { name: 'Snache',  hp: 60,  atk: 15,  speed: 2.0, range: 35,  atkSpeed: 25, color: '#d35400', size: 18 },
+  { name: 'Pigge',   hp: 250, atk: 50,  speed: 0.8, range: 50,  atkSpeed: 40, color: '#e91e63', size: 30 },
+  { name: 'Gory',    hp: 400, atk: 80,  speed: 1.0, range: 55,  atkSpeed: 45, color: '#8e44ad', size: 32 },
+  { name: 'Baa Baa', hp: 180, atk: 35,  speed: 1.5, range: 150, atkSpeed: 35, color: '#16a085', size: 24 },
+  { name: 'BOSS',    hp: 3000,atk: 150, speed: 0.5, range: 80,  atkSpeed: 50, color: '#c0392b', size: 50 },
+];
+
+let cooldowns = CAT_TYPES.map(() => 0);
+
+// Load player character image
+const playerImg = new Image();
+playerImg.src = 'unnamed.jpg';
+
+// ---- Spawn Helpers ----
+function spawnUnit(typeIndex) {
+  const t = CAT_TYPES[typeIndex];
+  if (money < t.cost || cooldowns[typeIndex] > 0) return;
+  money -= t.cost;
+  cooldowns[typeIndex] = t.cooldown;
+  units.push({
+    type: t,
+    x: 80 + BASE_SIZE() / 2,
+    hp: t.hp * (1 + (stageLevel - 1) * 0.05),
+    maxHp: t.hp * (1 + (stageLevel - 1) * 0.05),
+    atk: t.atk * (1 + (stageLevel - 1) * 0.05),
+    speed: t.speed,
+    range: t.range,
+    atkTimer: 0,
+    atkSpeed: t.atkSpeed,
+    side: 'player',
+    knockback: 0,
+  });
+}
+
+function spawnEnemy(typeIndex) {
+  const t = ENEMY_TYPES[typeIndex];
+  const mult = 1 + (stageLevel - 1) * 0.3;
+  enemies.push({
+    type: t,
+    x: W() - 80 - BASE_SIZE() / 2,
+    hp: t.hp * mult,
+    maxHp: t.hp * mult,
+    atk: t.atk * mult,
+    speed: t.speed,
+    range: t.range,
+    atkTimer: 0,
+    atkSpeed: t.atkSpeed,
+    side: 'enemy',
+    knockback: 0,
+  });
+}
+
+// ---- Drawing ----
+function drawSky() {
+  const grad = ctx.createLinearGradient(0, 0, 0, GROUND_Y());
+  grad.addColorStop(0, '#87ceeb');
+  grad.addColorStop(1, '#e0f0ff');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W(), GROUND_Y());
+  // ground
+  const ggrad = ctx.createLinearGradient(0, GROUND_Y(), 0, H());
+  ggrad.addColorStop(0, '#4a7c3f');
+  ggrad.addColorStop(1, '#2d5a27');
+  ctx.fillStyle = ggrad;
+  ctx.fillRect(0, GROUND_Y(), W(), H() - GROUND_Y());
+  // grass line
+  ctx.fillStyle = '#5a9c4f';
+  ctx.fillRect(0, GROUND_Y() - 3, W(), 6);
+}
+
+function drawBase(x, hp, maxHp, isPlayer) {
+  const s = BASE_SIZE();
+  const by = GROUND_Y() - s;
+  // tower body
+  ctx.fillStyle = isPlayer ? '#4a90d9' : '#d94a4a';
+  ctx.fillRect(x - s / 2, by, s, s);
+  // tower top
+  ctx.beginPath();
+  ctx.moveTo(x - s / 2 - 10, by);
+  ctx.lineTo(x, by - 25);
+  ctx.lineTo(x + s / 2 + 10, by);
+  ctx.fillStyle = isPlayer ? '#3a70b9' : '#b93a3a';
+  ctx.fill();
+  // windows
+  ctx.fillStyle = '#ffd700';
+  const ws = s * 0.15;
+  ctx.fillRect(x - ws * 1.5, by + s * 0.3, ws, ws);
+  ctx.fillRect(x + ws * 0.5, by + s * 0.3, ws, ws);
+  // door
+  ctx.fillStyle = '#5a3a1a';
+  ctx.fillRect(x - ws * 0.6, by + s * 0.6, ws * 1.2, s * 0.4);
+  // flag
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, by - 25);
+  ctx.lineTo(x, by - 55);
+  ctx.stroke();
+  ctx.fillStyle = isPlayer ? '#4a90d9' : '#d94a4a';
+  ctx.fillRect(x, by - 55, 20, 12);
+  // HP bar
+  const barW = s + 20;
+  const barH = 10;
+  const barX = x - barW / 2;
+  const barY = by - 65;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.fillStyle = hp / maxHp > 0.3 ? '#2ecc71' : '#e74c3c';
+  ctx.fillRect(barX, barY, barW * Math.max(0, hp / maxHp), barH);
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barX, barY, barW, barH);
+  // HP text
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(Math.ceil(hp) + ' / ' + Math.ceil(maxHp), x, barY - 3);
+}
+
+function drawUnit(u) {
+  const gy = GROUND_Y();
+  const s = u.type.size;
+  const dir = u.side === 'player' ? 1 : -1;
+  const bx = u.x;
+  const by = gy - s;
+
+  // body bounce
+  const bounce = Math.sin(frame * 0.15 + u.x * 0.1) * 2;
+
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath();
+  ctx.ellipse(bx, gy, s * 0.5, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (u.side === 'player' && playerImg.complete && playerImg.naturalWidth > 0) {
+    // Draw player character using the photo
+    const imgSize = s * 2.2;
+    ctx.save();
+    // Clip to circle
+    ctx.beginPath();
+    ctx.arc(bx, by + bounce - s * 0.2, imgSize / 2, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(playerImg, bx - imgSize / 2, by + bounce - s * 0.2 - imgSize / 2, imgSize, imgSize);
+    ctx.restore();
+    // Circle border with unit color
+    ctx.strokeStyle = u.type.color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(bx, by + bounce - s * 0.2, imgSize / 2, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (u.side === 'player') {
+    // fallback cat drawing
+    ctx.fillStyle = u.type.color;
+    ctx.beginPath();
+    ctx.ellipse(bx, by + bounce - s * 0.2, s * 0.5, s * 0.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(bx - s * 0.35, by + bounce - s * 0.6);
+    ctx.lineTo(bx - s * 0.15, by + bounce - s * 1.0);
+    ctx.lineTo(bx + s * 0.0, by + bounce - s * 0.6);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(bx + s * 0.0, by + bounce - s * 0.6);
+    ctx.lineTo(bx + s * 0.15, by + bounce - s * 1.0);
+    ctx.lineTo(bx + s * 0.35, by + bounce - s * 0.6);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(bx - s * 0.15, by + bounce - s * 0.35, s * 0.13, 0, Math.PI * 2);
+    ctx.arc(bx + s * 0.15, by + bounce - s * 0.35, s * 0.13, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // enemy drawing
+    ctx.fillStyle = u.type.color;
+    ctx.beginPath();
+    ctx.ellipse(bx, by + bounce - s * 0.2, s * 0.5, s * 0.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // enemy horns/spikes
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath();
+    ctx.moveTo(bx - s * 0.2, by + bounce - s * 0.7);
+    ctx.lineTo(bx - s * 0.1, by + bounce - s * 1.1);
+    ctx.lineTo(bx + s * 0.0, by + bounce - s * 0.7);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(bx + s * 0.0, by + bounce - s * 0.7);
+    ctx.lineTo(bx + s * 0.1, by + bounce - s * 1.1);
+    ctx.lineTo(bx + s * 0.2, by + bounce - s * 0.7);
+    ctx.fill();
+    // eyes
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(bx - s * 0.15, by + bounce - s * 0.35, s * 0.13, 0, Math.PI * 2);
+    ctx.arc(bx + s * 0.15, by + bounce - s * 0.35, s * 0.13, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.beginPath();
+    ctx.arc(bx - s * 0.12 + dir * 2, by + bounce - s * 0.33, s * 0.06, 0, Math.PI * 2);
+    ctx.arc(bx + s * 0.18 + dir * 2, by + bounce - s * 0.33, s * 0.06, 0, Math.PI * 2);
+    ctx.fill();
+    // enemy angry mouth
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.moveTo(bx - s * 0.2, by + bounce - s * 0.08);
+    ctx.lineTo(bx, by + bounce + s * 0.05);
+    ctx.lineTo(bx + s * 0.2, by + bounce - s * 0.08);
+    ctx.fill();
+  }
+
+  // HP bar
+  if (u.hp < u.maxHp) {
+    const bw = s * 1.2;
+    const bh = 4;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(bx - bw / 2, by + bounce - s * 1.15, bw, bh);
+    ctx.fillStyle = u.side === 'player' ? '#2ecc71' : '#e74c3c';
+    ctx.fillRect(bx - bw / 2, by + bounce - s * 1.15, bw * (u.hp / u.maxHp), bh);
+  }
+
+  // attack flash
+  if (u.atkTimer > u.atkSpeed - 5) {
+    ctx.fillStyle = 'rgba(255,255,100,0.4)';
+    ctx.beginPath();
+    ctx.arc(bx + dir * u.range * 0.5, by + bounce - s * 0.2, 15, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawEffects() {
+  for (let i = effects.length - 1; i >= 0; i--) {
+    const e = effects[i];
+    e.life--;
+    if (e.life <= 0) { effects.splice(i, 1); continue; }
+    ctx.globalAlpha = e.life / e.maxLife;
+    if (e.type === 'hit') {
+      ctx.fillStyle = '#ff0';
+      ctx.font = 'bold 16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(e.text, e.x, e.y - (e.maxLife - e.life) * 1.5);
+    } else if (e.type === 'death') {
+      ctx.fillStyle = e.color;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, (e.maxLife - e.life) * 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawUI() {
+  const w = W();
+  const h = H();
+  // top bar
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, w, 50);
+
+  // money
+  ctx.fillStyle = '#ffd700';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('$ ' + Math.floor(money), 15, 33);
+
+  // stage
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 18px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Stage ' + stageLevel, w / 2, 33);
+
+  // money upgrade button
+  const upgCost = MONEY_UPGRADE_COST[moneyLevel] || 99999;
+  const canUpg = money >= upgCost && moneyLevel < MONEY_UPGRADE_COST.length;
+  ctx.fillStyle = canUpg ? '#27ae60' : '#555';
+  ctx.fillRect(w - 200, 5, 190, 40);
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(w - 200, 5, 190, 40);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 13px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Worker Lv.' + moneyLevel + ' ($' + upgCost + ')', w - 105, 30);
+
+  // unit buttons
+  const btnH = 75;
+  const btnW = (w - 20) / CAT_TYPES.length;
+  const btnY = h - btnH - 10;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(0, btnY - 5, w, btnH + 15);
+
+  for (let i = 0; i < CAT_TYPES.length; i++) {
+    const t = CAT_TYPES[i];
+    const bx = 10 + i * btnW;
+    const canAfford = money >= t.cost && cooldowns[i] <= 0;
+
+    // button bg
+    ctx.fillStyle = canAfford ? '#2c3e50' : '#1a1a1a';
+    ctx.fillRect(bx, btnY, btnW - 4, btnH);
+    ctx.strokeStyle = canAfford ? t.color : '#444';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, btnY, btnW - 4, btnH);
+
+    // cooldown overlay
+    if (cooldowns[i] > 0) {
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      const cdRatio = cooldowns[i] / t.cooldown;
+      ctx.fillRect(bx, btnY, (btnW - 4) * cdRatio, btnH);
+    }
+
+    // unit icon (photo or fallback)
+    const ix = bx + (btnW - 4) / 2;
+    const iy = btnY + 20;
+    if (playerImg.complete && playerImg.naturalWidth > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(ix, iy, 12, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(playerImg, ix - 12, iy - 12, 24, 24);
+      ctx.restore();
+      ctx.strokeStyle = t.color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(ix, iy, 12, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = t.color;
+      ctx.beginPath();
+      ctx.arc(ix, iy, 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // name & cost
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(t.name, bx + (btnW - 4) / 2, btnY + 42);
+    ctx.fillStyle = canAfford ? '#ffd700' : '#888';
+    ctx.font = '11px sans-serif';
+    ctx.fillText('$' + t.cost, bx + (btnW - 4) / 2, btnY + 56);
+    ctx.fillStyle = '#aaa';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(t.desc, bx + (btnW - 4) / 2, btnY + 68);
+
+    // key hint
+    ctx.fillStyle = '#666';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(i + 1, bx + 10, btnY + 12);
+  }
+}
+
+function drawTitle() {
+  const w = W(), h = H();
+  drawSky();
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd700';
+  ctx.font = 'bold 56px sans-serif';
+  ctx.fillText('Nyanko Battle', w / 2, h * 0.3);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '24px sans-serif';
+  ctx.fillText('Click or press Space to start!', w / 2, h * 0.45);
+
+  // draw some characters
+  for (let i = 0; i < 5; i++) {
+    const cx = w * 0.2 + i * w * 0.15;
+    const cy = h * 0.65 + Math.sin(frame * 0.05 + i) * 15;
+    const radius = 25;
+    if (playerImg.complete && playerImg.naturalWidth > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(playerImg, cx - radius, cy - radius, radius * 2, radius * 2);
+      ctx.restore();
+      ctx.strokeStyle = CAT_TYPES[i].color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = CAT_TYPES[i].color;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  ctx.fillStyle = '#aaa';
+  ctx.font = '16px sans-serif';
+  ctx.fillText('Keys 1-8: Deploy cats  |  Money upgrades automatically', w / 2, h * 0.85);
+}
+
+function drawResult(won) {
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, W(), H());
+  ctx.textAlign = 'center';
+  ctx.fillStyle = won ? '#ffd700' : '#e74c3c';
+  ctx.font = 'bold 52px sans-serif';
+  ctx.fillText(won ? 'VICTORY!' : 'DEFEATED...', W() / 2, H() * 0.35);
+  ctx.fillStyle = '#fff';
+  ctx.font = '24px sans-serif';
+  if (won) {
+    ctx.fillText('Stage ' + (stageLevel - 1) + ' Clear!', W() / 2, H() * 0.45);
+    ctx.fillText('Next: Stage ' + stageLevel, W() / 2, H() * 0.52);
+  }
+  ctx.fillText('Click or press Space to continue', W() / 2, H() * 0.65);
+}
+
+// ---- Game Logic ----
+function findTarget(unit, targetList) {
+  let closest = null;
+  let minDist = Infinity;
+  const dir = unit.side === 'player' ? 1 : -1;
+  for (const t of targetList) {
+    if (t.hp <= 0) continue;
+    const dist = (t.x - unit.x) * dir;
+    if (dist > 0 && dist < minDist) {
+      minDist = dist;
+      closest = t;
+    }
+  }
+  return { target: closest, dist: minDist };
+}
+
+function updateUnits(unitList, targetList, targetBase) {
+  for (let i = unitList.length - 1; i >= 0; i--) {
+    const u = unitList[i];
+    if (u.hp <= 0) {
+      effects.push({ type: 'death', x: u.x, y: GROUND_Y() - u.type.size * 0.5, color: u.type.color, life: 20, maxLife: 20 });
+      unitList.splice(i, 1);
+      continue;
+    }
+
+    const dir = u.side === 'player' ? 1 : -1;
+    const { target, dist } = findTarget(u, targetList);
+
+    // check base distance
+    const baseX = u.side === 'player' ? W() - 80 : 80;
+    const baseDist = (baseX - u.x) * dir;
+
+    let inRange = false;
+    if (target && dist <= u.range) {
+      inRange = true;
+    }
+    if (baseDist <= u.range && baseDist > 0) {
+      inRange = true;
+    }
+
+    if (inRange) {
+      u.atkTimer++;
+      if (u.atkTimer >= u.atkSpeed) {
+        u.atkTimer = 0;
+        // attack nearest target or base
+        if (target && dist <= u.range) {
+          target.hp -= u.atk;
+          effects.push({ type: 'hit', x: target.x, y: GROUND_Y() - target.type.size, text: '-' + Math.floor(u.atk), life: 25, maxLife: 25 });
+        }
+        if (baseDist <= u.range && baseDist > 0) {
+          if (u.side === 'player') {
+            enemyHP -= u.atk;
+          } else {
+            playerHP -= u.atk;
+          }
+        }
+      }
+    } else {
+      u.atkTimer = 0;
+      u.x += u.speed * dir;
+    }
+  }
+}
+
+function spawnEnemies() {
+  spawnTimer++;
+  const baseInterval = Math.max(40, 150 - stageLevel * 8);
+
+  if (spawnTimer % baseInterval === 0) {
+    // random normal enemies
+    const maxType = Math.min(ENEMY_TYPES.length - 1, 1 + Math.floor(stageLevel / 2));
+    const typeIdx = Math.floor(Math.random() * maxType);
+    spawnEnemy(typeIdx);
+  }
+
+  // extra spawns at higher levels
+  if (stageLevel >= 3 && spawnTimer % (baseInterval * 2) === 0) {
+    const maxType = Math.min(ENEMY_TYPES.length - 1, Math.floor(stageLevel / 2));
+    spawnEnemy(Math.floor(Math.random() * maxType));
+  }
+
+  // boss spawn
+  if (!bossSpawned && spawnTimer > 600 + stageLevel * 100) {
+    bossSpawned = true;
+    spawnEnemy(ENEMY_TYPES.length - 1);
+  }
+}
+
+function update() {
+  frame++;
+
+  // money generation
+  if (frame % Math.max(5, 30 - moneyLevel * 3) === 0) {
+    money = Math.min(maxMoney + moneyLevel * 1000, money + (5 + moneyLevel * 2));
+  }
+
+  // cooldowns
+  for (let i = 0; i < cooldowns.length; i++) {
+    if (cooldowns[i] > 0) cooldowns[i]--;
+  }
+
+  spawnEnemies();
+  updateUnits(units, enemies, 'enemy');
+  updateUnits(enemies, units, 'player');
+
+  // check win/lose
+  if (enemyHP <= 0) {
+    gameState = 'win';
+    stageLevel++;
+    return;
+  }
+  if (playerHP <= 0) {
+    gameState = 'lose';
+    return;
+  }
+}
+
+function startStage() {
+  units = [];
+  enemies = [];
+  effects = [];
+  spawnTimer = 0;
+  bossSpawned = false;
+  cooldowns = CAT_TYPES.map(() => 0);
+  playerHP = playerMaxHP;
+  enemyMaxHP = 1500 + (stageLevel - 1) * 500;
+  enemyHP = enemyMaxHP;
+  if (gameState === 'lose') {
+    money = 500;
+    moneyLevel = 1;
+    stageLevel = 1;
+    playerMaxHP = 1000;
+    playerHP = 1000;
+    enemyMaxHP = 1500;
+    enemyHP = 1500;
+  }
+  gameState = 'playing';
+}
+
+// ---- Input ----
+function getButtonIndex(mx, my) {
+  const btnH = 75;
+  const btnW = (W() - 20) / CAT_TYPES.length;
+  const btnY = H() - btnH - 10;
+  if (my < btnY || my > btnY + btnH) return -1;
+  const idx = Math.floor((mx - 10) / btnW);
+  if (idx < 0 || idx >= CAT_TYPES.length) return -1;
+  return idx;
+}
+
+function isUpgradeClick(mx, my) {
+  return mx >= W() - 200 && mx <= W() - 10 && my >= 5 && my <= 45;
+}
+
+canvas.addEventListener('click', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  if (gameState === 'title' || gameState === 'win' || gameState === 'lose') {
+    startStage();
+    return;
+  }
+
+  if (gameState === 'playing') {
+    if (isUpgradeClick(mx, my)) {
+      const cost = MONEY_UPGRADE_COST[moneyLevel] || 99999;
+      if (money >= cost && moneyLevel < MONEY_UPGRADE_COST.length) {
+        money -= cost;
+        moneyLevel++;
+      }
+      return;
+    }
+    const idx = getButtonIndex(mx, my);
+    if (idx >= 0) spawnUnit(idx);
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (gameState === 'title' || gameState === 'win' || gameState === 'lose') {
+    if (e.key === ' ') { startStage(); e.preventDefault(); }
+    return;
+  }
+  if (gameState === 'playing') {
+    const num = parseInt(e.key);
+    if (num >= 1 && num <= 8) {
+      spawnUnit(num - 1);
+    }
+  }
+});
+
+// ---- Main Loop ----
+function gameLoop() {
+  ctx.clearRect(0, 0, W(), H());
+
+  if (gameState === 'title') {
+    drawTitle();
+  } else if (gameState === 'playing') {
+    update();
+    drawSky();
+    // draw bases
+    drawBase(80, playerHP, playerMaxHP, true);
+    drawBase(W() - 80, enemyHP, enemyMaxHP, false);
+    // draw units
+    const allUnits = [...units, ...enemies].sort((a, b) => a.x - b.x);
+    for (const u of allUnits) drawUnit(u);
+    drawEffects();
+    drawUI();
+  } else if (gameState === 'win') {
+    drawSky();
+    drawBase(80, playerHP, playerMaxHP, true);
+    drawBase(W() - 80, 0, enemyMaxHP, false);
+    drawResult(true);
+  } else if (gameState === 'lose') {
+    drawSky();
+    drawBase(80, 0, playerMaxHP, true);
+    drawBase(W() - 80, enemyHP, enemyMaxHP, false);
+    drawResult(false);
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>
