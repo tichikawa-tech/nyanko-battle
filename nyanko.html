@@ -82,6 +82,162 @@ const ENEMY_TYPES = [
 
 let cooldowns = CAT_TYPES.map(() => 0);
 
+// ---- Power Items ----
+const POWER_ITEMS = [
+  { name: 'ATK UP',    color: '#e74c3c', icon: '\u2694', duration: 600, desc: 'ATK x2 (10s)' },
+  { name: 'HEAL',      color: '#2ecc71', icon: '\u2764', duration: 0,   desc: 'Heal all units' },
+  { name: 'SPEED UP',  color: '#3498db', icon: '\u26a1', duration: 480, desc: 'Speed x2 (8s)' },
+  { name: 'MONEY',     color: '#ffd700', icon: '\ud83d\udcb0', duration: 0,   desc: '+500 money' },
+  { name: 'BOMB',      color: '#ff6600', icon: '\ud83d\udca3', duration: 0,   desc: 'Damage all enemies' },
+  { name: 'SHIELD',    color: '#9b59b6', icon: '\ud83d\udee1', duration: 480, desc: 'DEF x2 (8s)' },
+];
+let powerItems = [];       // items on field
+let activePowers = [];     // active buff timers
+let itemSpawnTimer = 0;
+
+function spawnPowerItem() {
+  const type = Math.floor(Math.random() * POWER_ITEMS.length);
+  const x = 150 + Math.random() * (W() - 300);
+  const y = GROUND_Y() * 0.2 + Math.random() * (GROUND_Y() * 0.4);
+  powerItems.push({ type, x, y, life: 480, maxLife: 480 });
+}
+
+function collectPowerItem(idx) {
+  const item = powerItems[idx];
+  const p = POWER_ITEMS[item.type];
+  powerItems.splice(idx, 1);
+
+  // Apply effect
+  switch (item.type) {
+    case 0: // ATK UP
+      activePowers.push({ type: 0, timer: p.duration });
+      for (const u of units) u.atk *= 2;
+      effects.push({ type: 'hit', x: W() / 2, y: GROUND_Y() * 0.3, text: 'ATK UP!', life: 40, maxLife: 40 });
+      break;
+    case 1: // HEAL
+      for (const u of units) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * 0.5);
+      playerHP = Math.min(playerMaxHP, playerHP + playerMaxHP * 0.3);
+      effects.push({ type: 'hit', x: W() / 2, y: GROUND_Y() * 0.3, text: 'HEAL!', life: 40, maxLife: 40 });
+      break;
+    case 2: // SPEED UP
+      activePowers.push({ type: 2, timer: p.duration });
+      for (const u of units) u.speed *= 2;
+      effects.push({ type: 'hit', x: W() / 2, y: GROUND_Y() * 0.3, text: 'SPEED UP!', life: 40, maxLife: 40 });
+      break;
+    case 3: // MONEY
+      money += 500;
+      effects.push({ type: 'hit', x: W() / 2, y: GROUND_Y() * 0.3, text: '+$500!', life: 40, maxLife: 40 });
+      break;
+    case 4: // BOMB
+      for (const e of enemies) e.hp -= e.maxHp * 0.3;
+      enemyHP -= enemyMaxHP * 0.05;
+      effects.push({ type: 'hit', x: W() / 2, y: GROUND_Y() * 0.3, text: 'BOMB!', life: 40, maxLife: 40 });
+      break;
+    case 5: // SHIELD
+      activePowers.push({ type: 5, timer: p.duration });
+      effects.push({ type: 'hit', x: W() / 2, y: GROUND_Y() * 0.3, text: 'SHIELD!', life: 40, maxLife: 40 });
+      break;
+  }
+}
+
+function updatePowerItems() {
+  // Spawn items periodically
+  itemSpawnTimer++;
+  if (itemSpawnTimer % 300 === 0 && powerItems.length < 3) {
+    spawnPowerItem();
+  }
+
+  // Decay items
+  for (let i = powerItems.length - 1; i >= 0; i--) {
+    powerItems[i].life--;
+    if (powerItems[i].life <= 0) powerItems.splice(i, 1);
+  }
+
+  // Update active power timers
+  for (let i = activePowers.length - 1; i >= 0; i--) {
+    activePowers[i].timer--;
+    if (activePowers[i].timer <= 0) {
+      // Revert buff
+      const ap = activePowers[i];
+      if (ap.type === 0) { // ATK revert
+        for (const u of units) u.atk /= 2;
+      } else if (ap.type === 2) { // SPEED revert
+        for (const u of units) u.speed /= 2;
+      }
+      activePowers.splice(i, 1);
+    }
+  }
+}
+
+function drawPowerItems() {
+  for (const item of powerItems) {
+    const p = POWER_ITEMS[item.type];
+    const pulse = 1 + Math.sin(frame * 0.1) * 0.15;
+    const alpha = item.life < 120 ? item.life / 120 : 1;
+    ctx.globalAlpha = alpha;
+
+    // Glow
+    ctx.fillStyle = p.color + '44';
+    ctx.beginPath();
+    ctx.arc(item.x, item.y, 28 * pulse, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Background circle
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(item.x, item.y, 20 * pulse, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Border
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(item.x, item.y, 20 * pulse, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Icon
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(p.icon, item.x, item.y);
+    ctx.textBaseline = 'alphabetic';
+
+    // Name below
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillText(p.name, item.x, item.y + 32);
+
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawActivePowers() {
+  if (activePowers.length === 0) return;
+  let offsetX = 160;
+  for (const ap of activePowers) {
+    const p = POWER_ITEMS[ap.type];
+    const secs = Math.ceil(ap.timer / 60);
+    ctx.fillStyle = p.color;
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(p.icon + ' ' + secs + 's', offsetX, 33);
+    offsetX += 70;
+  }
+}
+
+function clickPowerItem(mx, my) {
+  for (let i = powerItems.length - 1; i >= 0; i--) {
+    const item = powerItems[i];
+    const dx = mx - item.x;
+    const dy = my - item.y;
+    if (dx * dx + dy * dy < 25 * 25) {
+      collectPowerItem(i);
+      return true;
+    }
+  }
+  return false;
+}
+
 // Load player character image
 const playerImg = new Image();
 playerImg.src = 'unnamed.jpg';
@@ -530,14 +686,19 @@ function updateUnits(unitList, targetList, targetBase) {
         u.atkTimer = 0;
         // attack nearest target or base
         if (target && dist <= u.range) {
-          target.hp -= u.atk;
-          effects.push({ type: 'hit', x: target.x, y: GROUND_Y() - target.type.size, text: '-' + Math.floor(u.atk), life: 25, maxLife: 25 });
+          let dmg = u.atk;
+          // Shield reduces damage to player units
+          if (target.side === 'player' && activePowers.some(ap => ap.type === 5)) dmg *= 0.5;
+          target.hp -= dmg;
+          effects.push({ type: 'hit', x: target.x, y: GROUND_Y() - target.type.size, text: '-' + Math.floor(dmg), life: 25, maxLife: 25 });
         }
         if (baseDist <= u.range && baseDist > 0) {
+          let dmg = u.atk;
+          if (u.side === 'enemy' && activePowers.some(ap => ap.type === 5)) dmg *= 0.5;
           if (u.side === 'player') {
-            enemyHP -= u.atk;
+            enemyHP -= dmg;
           } else {
-            playerHP -= u.atk;
+            playerHP -= dmg;
           }
         }
       }
@@ -586,6 +747,7 @@ function update() {
   }
 
   spawnEnemies();
+  updatePowerItems();
   updateUnits(units, enemies, 'enemy');
   updateUnits(enemies, units, 'player');
 
@@ -608,6 +770,9 @@ function startStage() {
   spawnTimer = 0;
   bossSpawned = false;
   cooldowns = CAT_TYPES.map(() => 0);
+  powerItems = [];
+  activePowers = [];
+  itemSpawnTimer = 0;
   playerHP = playerMaxHP;
   enemyMaxHP = 1500 + (stageLevel - 1) * 500;
   enemyHP = enemyMaxHP;
@@ -649,6 +814,7 @@ canvas.addEventListener('click', (e) => {
   }
 
   if (gameState === 'playing') {
+    if (clickPowerItem(mx, my)) return;
     if (isUpgradeClick(mx, my)) {
       const cost = MONEY_UPGRADE_COST[moneyLevel] || 99999;
       if (money >= cost && moneyLevel < MONEY_UPGRADE_COST.length) {
@@ -690,8 +856,10 @@ function gameLoop() {
     // draw units
     const allUnits = [...units, ...enemies].sort((a, b) => a.x - b.x);
     for (const u of allUnits) drawUnit(u);
+    drawPowerItems();
     drawEffects();
     drawUI();
+    drawActivePowers();
   } else if (gameState === 'win') {
     drawSky();
     drawBase(80, playerHP, playerMaxHP, true);
