@@ -98,7 +98,7 @@ let itemSpawnTimer = 0;
 function spawnPowerItem() {
   const type = Math.floor(Math.random() * POWER_ITEMS.length);
   const x = 150 + Math.random() * (W() - 300);
-  const y = GROUND_Y() * 0.2 + Math.random() * (GROUND_Y() * 0.4);
+  const y = GROUND_Y() * 0.35 + Math.random() * (GROUND_Y() * 0.3);
   powerItems.push({ type, x, y, life: 480, maxLife: 480 });
 }
 
@@ -141,10 +141,10 @@ function collectPowerItem(idx) {
 }
 
 function updatePowerItems() {
-  // Spawn items periodically
+  // Spawn items periodically (first at 2s, then every 3s, max 5 on field)
   itemSpawnTimer++;
-  if (itemSpawnTimer % 300 === 0 && powerItems.length < 3) {
-    spawnPowerItem();
+  if (itemSpawnTimer === 120 || (itemSpawnTimer > 120 && itemSpawnTimer % 180 === 0)) {
+    if (powerItems.length < 5) spawnPowerItem();
   }
 
   // Decay items
