@@ -27,6 +27,314 @@ canvas {
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
+// ---- Epic BGM with Web Audio API ----
+let audioCtx = null;
+let bgmPlaying = false;
+
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+function createBattleBGM() {
+  if (!audioCtx || bgmPlaying) return;
+  bgmPlaying = true;
+
+  const bpm = 150;
+  const beatLen = 60 / bpm;
+  const barLen = beatLen * 4;
+  const totalBars = 8;
+  const loopLen = barLen * totalBars;
+
+  // Master volume
+  const master = audioCtx.createGain();
+  master.gain.value = 0.35;
+  master.connect(audioCtx.destination);
+
+  // Compressor for punch
+  const comp = audioCtx.createDynamicsCompressor();
+  comp.threshold.value = -20;
+  comp.ratio.value = 8;
+  comp.connect(master);
+
+  function scheduleLoop() {
+    const now = audioCtx.currentTime + 0.05;
+
+    // ---- DRUMS ----
+    function playKick(time) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(150, time);
+      osc.frequency.exponentialRampToValueAtTime(30, time + 0.15);
+      gain.gain.setValueAtTime(1.0, time);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + 0.3);
+      osc.connect(gain);
+      gain.connect(comp);
+      osc.start(time);
+      osc.stop(time + 0.3);
+    }
+
+    function playSnare(time) {
+      // Noise burst
+      const bufSize = audioCtx.sampleRate * 0.1;
+      const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+      const noise = audioCtx.createBufferSource();
+      noise.buffer = buf;
+      const nGain = audioCtx.createGain();
+      nGain.gain.setValueAtTime(0.8, time);
+      nGain.gain.exponentialRampToValueAtTime(0.001, time + 0.12);
+      const hpf = audioCtx.createBiquadFilter();
+      hpf.type = 'highpass';
+      hpf.frequency.value = 2000;
+      noise.connect(hpf);
+      hpf.connect(nGain);
+      nGain.connect(comp);
+      noise.start(time);
+      noise.stop(time + 0.12);
+      // Body
+      const osc = audioCtx.createOscillator();
+      const oGain = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(200, time);
+      osc.frequency.exponentialRampToValueAtTime(80, time + 0.08);
+      oGain.gain.setValueAtTime(0.6, time);
+      oGain.gain.exponentialRampToValueAtTime(0.001, time + 0.1);
+      osc.connect(oGain);
+      oGain.connect(comp);
+      osc.start(time);
+      osc.stop(time + 0.1);
+    }
+
+    function playHihat(time, open) {
+      const bufSize = audioCtx.sampleRate * (open ? 0.15 : 0.04);
+      const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+      const noise = audioCtx.createBufferSource();
+      noise.buffer = buf;
+      const gain = audioCtx.createGain();
+      gain.gain.setValueAtTime(open ? 0.25 : 0.15, time);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + (open ? 0.15 : 0.04));
+      const bpf = audioCtx.createBiquadFilter();
+      bpf.type = 'bandpass';
+      bpf.frequency.value = 8000;
+      bpf.Q.value = 1;
+      noise.connect(bpf);
+      bpf.connect(gain);
+      gain.connect(comp);
+      noise.start(time);
+      noise.stop(time + (open ? 0.15 : 0.04));
+    }
+
+    // Drum pattern per bar
+    for (let bar = 0; bar < totalBars; bar++) {
+      const bStart = now + bar * barLen;
+      // Kick: beats 1, 1.5, 3
+      playKick(bStart);
+      playKick(bStart + beatLen * 0.5);
+      playKick(bStart + beatLen * 2);
+      if (bar % 2 === 1) playKick(bStart + beatLen * 2.75);
+      // Snare: beats 2, 4
+      playSnare(bStart + beatLen);
+      playSnare(bStart + beatLen * 3);
+      // Fill on last bar
+      if (bar === totalBars - 1) {
+        playSnare(bStart + beatLen * 3.25);
+        playSnare(bStart + beatLen * 3.5);
+        playSnare(bStart + beatLen * 3.75);
+      }
+      // Hihat: 8th notes
+      for (let i = 0; i < 8; i++) {
+        playHihat(bStart + i * beatLen * 0.5, i === 4);
+      }
+    }
+
+    // ---- BASS ----
+    const bassNotes = [
+      // bar 1-2: Em
+      55, 55, 55, 65.41, 55, 55, 73.42, 55,
+      55, 55, 55, 65.41, 55, 55, 49.00, 55,
+      // bar 3-4: C
+      65.41, 65.41, 65.41, 73.42, 65.41, 65.41, 82.41, 65.41,
+      65.41, 65.41, 65.41, 73.42, 65.41, 65.41, 55, 65.41,
+      // bar 5-6: D
+      73.42, 73.42, 73.42, 82.41, 73.42, 73.42, 55, 73.42,
+      73.42, 73.42, 73.42, 82.41, 73.42, 73.42, 65.41, 73.42,
+      // bar 7-8: B -> Em
+      61.74, 61.74, 61.74, 73.42, 61.74, 61.74, 55, 61.74,
+      55, 55, 73.42, 82.41, 55, 73.42, 55, 55,
+    ];
+    const bassOsc = audioCtx.createOscillator();
+    const bassGain = audioCtx.createGain();
+    const bassFilter = audioCtx.createBiquadFilter();
+    bassOsc.type = 'sawtooth';
+    bassGain.gain.value = 0.3;
+    bassFilter.type = 'lowpass';
+    bassFilter.frequency.value = 300;
+    bassFilter.Q.value = 5;
+    bassOsc.connect(bassFilter);
+    bassFilter.connect(bassGain);
+    bassGain.connect(comp);
+    bassOsc.start(now);
+    for (let i = 0; i < bassNotes.length; i++) {
+      const t = now + i * (loopLen / bassNotes.length);
+      bassOsc.frequency.setValueAtTime(bassNotes[i], t);
+    }
+    bassOsc.stop(now + loopLen);
+
+    // ---- LEAD MELODY ----
+    const melodyNotes = [
+      // Epic minor melody (Em scale)
+      [329.63, 0.5], [392, 0.5], [440, 0.5], [493.88, 0.5],
+      [523.25, 1.0], [493.88, 0.5], [440, 0.5],
+      [392, 0.75], [329.63, 0.25], [349.23, 0.5], [329.63, 0.5],
+      [293.66, 1.0], [0, 1.0],
+      // Phrase 2
+      [329.63, 0.5], [440, 0.5], [523.25, 0.5], [587.33, 0.5],
+      [659.25, 1.0], [587.33, 0.5], [523.25, 0.5],
+      [493.88, 0.5], [440, 0.5], [493.88, 0.5], [523.25, 0.5],
+      [493.88, 1.5], [0, 0.5],
+      // Phrase 3: power riff
+      [659.25, 0.25], [587.33, 0.25], [523.25, 0.25], [493.88, 0.25],
+      [440, 0.5], [523.25, 0.5], [493.88, 1.0],
+      [440, 0.25], [392, 0.25], [349.23, 0.25], [329.63, 0.25],
+      [293.66, 0.5], [349.23, 0.5], [329.63, 1.0],
+      // Phrase 4: climax
+      [523.25, 0.5], [587.33, 0.5], [659.25, 1.0],
+      [783.99, 0.5], [659.25, 0.5], [587.33, 1.0],
+      [523.25, 0.5], [493.88, 0.5], [440, 0.5], [493.88, 0.5],
+      [329.63, 2.0],
+    ];
+    let melTime = now;
+    for (const [freq, dur] of melodyNotes) {
+      const noteDur = dur * beatLen;
+      if (freq > 0) {
+        // Distorted lead
+        const osc1 = audioCtx.createOscillator();
+        const osc2 = audioCtx.createOscillator();
+        const mGain = audioCtx.createGain();
+        const dist = audioCtx.createWaveShaper();
+        osc1.type = 'sawtooth';
+        osc2.type = 'square';
+        osc1.frequency.value = freq;
+        osc2.frequency.value = freq * 1.003;
+        // Distortion curve
+        const samples = 256;
+        const curve = new Float32Array(samples);
+        for (let i = 0; i < samples; i++) {
+          const x = (i * 2) / samples - 1;
+          curve[i] = Math.tanh(x * 3);
+        }
+        dist.curve = curve;
+        mGain.gain.setValueAtTime(0.18, melTime);
+        mGain.gain.setValueAtTime(0.18, melTime + noteDur * 0.8);
+        mGain.gain.exponentialRampToValueAtTime(0.001, melTime + noteDur);
+        osc1.connect(dist);
+        osc2.connect(dist);
+        dist.connect(mGain);
+        mGain.connect(comp);
+        osc1.start(melTime);
+        osc2.start(melTime);
+        osc1.stop(melTime + noteDur);
+        osc2.stop(melTime + noteDur);
+      }
+      melTime += noteDur;
+    }
+
+    // ---- POWER CHORDS (rhythm guitar) ----
+    const chordProg = [
+      [164.81, 246.94], // Em
+      [164.81, 246.94],
+      [130.81, 196.00], // C
+      [130.81, 196.00],
+      [146.83, 220.00], // D
+      [146.83, 220.00],
+      [123.47, 185.00], // B
+      [164.81, 246.94], // Em
+    ];
+    for (let bar = 0; bar < totalBars; bar++) {
+      const bStart = now + bar * barLen;
+      const [root, fifth] = chordProg[bar];
+      // Palm-muted power chord hits
+      const hits = [0, 0.5, 2, 2.5, 3.5];
+      for (const h of hits) {
+        const t = bStart + h * beatLen;
+        const dur = 0.15;
+        for (const freq of [root, fifth, root * 2]) {
+          const osc = audioCtx.createOscillator();
+          const g = audioCtx.createGain();
+          const d = audioCtx.createWaveShaper();
+          osc.type = 'sawtooth';
+          osc.frequency.value = freq;
+          const samples = 256;
+          const curve = new Float32Array(samples);
+          for (let i = 0; i < samples; i++) {
+            const x = (i * 2) / samples - 1;
+            curve[i] = Math.tanh(x * 4);
+          }
+          d.curve = curve;
+          g.gain.setValueAtTime(0.1, t);
+          g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+          osc.connect(d);
+          d.connect(g);
+          g.connect(comp);
+          osc.start(t);
+          osc.stop(t + dur);
+        }
+      }
+    }
+
+    // Schedule next loop
+    setTimeout(scheduleLoop, (loopLen - 0.5) * 1000);
+  }
+
+  scheduleLoop();
+}
+
+function playSE(type) {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  if (type === 'item') {
+    // Sparkle pickup sound
+    const freqs = [880, 1108, 1318, 1760];
+    freqs.forEach((f, i) => {
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = f;
+      g.gain.setValueAtTime(0.2, now + i * 0.06);
+      g.gain.exponentialRampToValueAtTime(0.001, now + i * 0.06 + 0.15);
+      osc.connect(g);
+      g.connect(audioCtx.destination);
+      osc.start(now + i * 0.06);
+      osc.stop(now + i * 0.06 + 0.15);
+    });
+  } else if (type === 'bomb') {
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(200, now);
+    osc.frequency.exponentialRampToValueAtTime(20, now + 0.5);
+    g.gain.setValueAtTime(0.4, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    osc.connect(g);
+    g.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.5);
+  }
+}
+
+function stopBGM() {
+  if (audioCtx) {
+    audioCtx.close();
+    audioCtx = null;
+    bgmPlaying = false;
+  }
+}
+
 // Responsive sizing
 function resize() {
   canvas.width = Math.min(window.innerWidth, 1200);
@@ -106,6 +414,9 @@ function collectPowerItem(idx) {
   const item = powerItems[idx];
   const p = POWER_ITEMS[item.type];
   powerItems.splice(idx, 1);
+
+  // Play SE
+  playSE(item.type === 4 ? 'bomb' : 'item');
 
   // Apply effect
   switch (item.type) {
@@ -809,6 +1120,8 @@ canvas.addEventListener('click', (e) => {
   const my = e.clientY - rect.top;
 
   if (gameState === 'title' || gameState === 'win' || gameState === 'lose') {
+    initAudio();
+    if (!bgmPlaying) createBattleBGM();
     startStage();
     return;
   }
@@ -830,7 +1143,7 @@ canvas.addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (gameState === 'title' || gameState === 'win' || gameState === 'lose') {
-    if (e.key === ' ') { startStage(); e.preventDefault(); }
+    if (e.key === ' ') { initAudio(); if (!bgmPlaying) createBattleBGM(); startStage(); e.preventDefault(); }
     return;
   }
   if (gameState === 'playing') {
